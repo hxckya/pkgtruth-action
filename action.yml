@@ -1,0 +1,141 @@
+name: 'pkgtruth'
+description: 'Block hallucinated and slopsquatted npm dependencies in pull requests. Flags names that do not exist, names npm purged for malware, and impostors of popular packages.'
+author: 'hxckya'
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  path:
+    description: 'Directory containing package.json (or a path to a package.json).'
+    required: false
+    default: '.'
+  fail-on:
+    description: '"danger" (default) fails only on HALLUCINATED/DANGER; "caution" also fails on CAUTION and UNKNOWN.'
+    required: false
+    default: 'danger'
+  comment:
+    description: 'Post (and keep updated) a sticky pull-request comment with the findings. Needs `pull-requests: write`.'
+    required: false
+    default: 'true'
+  version:
+    description: 'pkgtruth version to run.'
+    required: false
+    default: 'latest'
+  node-version:
+    description: 'Node.js version to use.'
+    required: false
+    default: '22'
+
+outputs:
+  blocking:
+    description: 'Number of packages at or above the fail-on level.'
+    value: ${{ steps.scan.outputs.blocking }}
+  total:
+    description: 'Number of packages checked.'
+    value: ${{ steps.scan.outputs.total }}
+  report:
+    description: 'Path to the JSON report.'
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        PKGTRUTH_PATH: ${{ inputs.path }}
+        PKGTRUTH_FAIL_ON: ${{ inputs.fail-on }}
+        PKGTRUTH_VERSION: ${{ inputs.version }}
+      run: |
+        set +e
+        REPORT="$RUNNER_TEMP/pkgtruth.json"
+        npx -y "pkgtruth@${PKGTRUTH_VERSION}" scan "$PKGTRUTH_PATH" --fail-on "$PKGTRUTH_FAIL_ON" --json > "$REPORT"
+        CODE=$?
+        set -e
+        if [ "$CODE" -eq 2 ]; then
+          echo "::error::pkgtruth could not run (usage or runtime error)"; cat "$REPORT"; exit 2
+        fi
+        echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+        echo "code=$CODE" >> "$GITHUB_OUTPUT"
+        echo "blocking=$(jq -r '.blocking' "$REPORT")" >> "$GITHUB_OUTPUT"
+        echo "total=$(jq -r '.total' "$REPORT")" >> "$GITHUB_OUTPUT"
+        # Human-readable view in the job log
+        npx -y "pkgtruth@${PKGTRUTH_VERSION}" scan "$PKGTRUTH_PATH" --fail-on "$PKGTRUTH_FAIL_ON" || true
+
+    - name: Render comment
+      id: render
+      shell: bash
+      env:
+        REPORT: ${{ steps.scan.outputs.report }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        {
+          echo '<!-- pkgtruth -->'
+          B=$(jq -r '.blocking' "$REPORT"); T=$(jq -r '.total' "$REPORT")
+          if [ "$B" -gt 0 ]; then
+            echo "### ⛔ pkgtruth: $B of $T dependencies must not be installed as-is"
+          else
+            U=$(jq -r '[.results[] | select(.verdict=="UNKNOWN")] | length' "$REPORT")
+            if [ "$U" -gt 0 ]; then echo "### ⚠️ pkgtruth: $T checked, $U could not be verified"
+            else echo "### ✅ pkgtruth: $T dependencies checked, nothing blocking"; fi
+          fi
+          echo
+          echo '| verdict | package | evidence |'
+          echo '|---|---|---|'
+          jq -r '
+            def order: {"HALLUCINATED":0,"DANGER":1,"CAUTION":2,"UNKNOWN":3,"SAFE":4};
+            .results
+            | sort_by(order[.verdict])
+            | .[]
+            | select(.verdict != "SAFE")
+            | "| **\(.verdict)** | `\(.name)` | \(
+                [ .signals[] | select(.severity=="critical" or .severity=="high") | .detail ]
+                + (if .didYouMean then ["did you mean: " + ([.didYouMean[0:3][].name] | join(", "))] else [] end)
+                | join("<br>") | gsub("\\|";"\\\\|")
+              ) |"
+          ' "$REPORT"
+          S=$(jq -r '[.results[] | select(.verdict=="SAFE")] | length' "$REPORT")
+          [ "$S" -gt 0 ] && echo "| SAFE | _${S} package(s)_ | |"
+          echo
+          echo "<sub>fail-on: \`$FAIL_ON\` · [pkgtruth](https://github.com/hxckya/pkgtruth) checks whether a package exists, whether npm purged it for malware, and whether a near-identical name has far more adoption. It does not read package source.</sub>"
+        } > "$RUNNER_TEMP/pkgtruth-comment.md"
+        echo "path=$RUNNER_TEMP/pkgtruth-comment.md" >> "$GITHUB_OUTPUT"
+
+    - name: Sticky PR comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BODY_FILE: ${{ steps.render.outputs.path }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -e
+        EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate -q '.[] | select(.body | startswith("<!-- pkgtruth -->")) | .id' | head -1 || true)
+        if [ -n "$EXISTING" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -F body=@"$BODY_FILE" >/dev/null
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$BODY_FILE" >/dev/null
+        fi
+
+    - name: Job summary
+      shell: bash
+      env:
+        BODY_FILE: ${{ steps.render.outputs.path }}
+      run: cat "$BODY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Fail if blocking
+      shell: bash
+      env:
+        CODE: ${{ steps.scan.outputs.code }}
+      run: |
+        if [ "$CODE" -ne 0 ]; then
+          echo "::error::pkgtruth found blocking dependencies (see the PR comment or job summary)"
+          exit 1
+        fi

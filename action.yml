@@ -1,5 +1,5 @@
 name: 'pkgtruth'
-description: 'Block hallucinated and slopsquatted npm dependencies in pull requests. Flags names that do not exist, names npm purged for malware, and impostors of popular packages.'
+description: 'Block hallucinated and slopsquatted npm dependencies in pull requests: missing names, npm-purged names, impostors.'
 author: 'hxckya'
 branding:
   icon: 'shield'

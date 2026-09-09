@@ -1,5 +1,8 @@
 # pkgtruth Action
 
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-pkgtruth-blue?logo=github)](https://github.com/marketplace/actions/pkgtruth)
+[![release](https://img.shields.io/github/v/release/hxckya/pkgtruth-action)](https://github.com/hxckya/pkgtruth-action/releases)
+
 **Block hallucinated and slopsquatted npm dependencies in pull requests.**
 
 Coding agents invent package names. Attackers register the ones that repeat.

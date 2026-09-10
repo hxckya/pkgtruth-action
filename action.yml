@@ -55,8 +55,20 @@ runs:
       run: |
         set +e
         REPORT="$RUNNER_TEMP/pkgtruth.json"
-        npx -y "pkgtruth@${PKGTRUTH_VERSION}" scan "$PKGTRUTH_PATH" --fail-on "$PKGTRUTH_FAIL_ON" --json > "$REPORT"
-        CODE=$?
+        # Right after a release the registry can advertise a version whose
+        # tarball has not replicated yet (observed: ~3 minutes of E404 on
+        # `latest`). Retry the fetch a few times before calling it a failure.
+        CODE=2
+        for attempt in 1 2 3 4; do
+          npx -y "pkgtruth@${PKGTRUTH_VERSION}" scan "$PKGTRUTH_PATH" --fail-on "$PKGTRUTH_FAIL_ON" --json > "$REPORT" 2> "$RUNNER_TEMP/pkgtruth.err"
+          CODE=$?
+          if [ "$CODE" -eq 2 ] && grep -qE "E404|ETARGET|ENOTFOUND|ECONNRESET" "$RUNNER_TEMP/pkgtruth.err"; then
+            echo "::notice::pkgtruth@${PKGTRUTH_VERSION} not fetchable yet (attempt $attempt); retrying in 30s"
+            sleep 30; continue
+          fi
+          break
+        done
+        cat "$RUNNER_TEMP/pkgtruth.err" >&2 || true
         set -e
         if [ "$CODE" -eq 2 ]; then
           echo "::error::pkgtruth could not run (usage or runtime error)"; cat "$REPORT"; exit 2

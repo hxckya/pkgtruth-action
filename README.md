@@ -3,18 +3,22 @@
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-pkgtruth-blue?logo=github)](https://github.com/marketplace/actions/pkgtruth)
 [![release](https://img.shields.io/github/v/release/hxckya/pkgtruth-action)](https://github.com/hxckya/pkgtruth-action/releases)
 
-**Block hallucinated and slopsquatted npm dependencies in pull requests.**
+**Block hallucinated and slopsquatted npm and PyPI dependencies in pull requests.**
 
 Coding agents invent package names. Attackers register the ones that repeat.
-This action runs [pkgtruth](https://github.com/hxckya/pkgtruth) against your
-`package.json` on every pull request, posts a sticky comment with the evidence,
-and fails the check when something must not be installed.
+This action runs [pkgtruth](https://github.com/hxckya/pkgtruth) against every
+manifest in the target directory — `package.json`, `requirements*.txt`,
+`pyproject.toml` — on every pull request, posts a sticky comment with the
+evidence, and fails the check when something must not be installed.
 
 ```yaml
 name: Dependency gate
 on:
   pull_request:
-    paths: ['package.json', '**/package.json']
+    paths:
+      - '**/package.json'
+      - '**/requirements*.txt'
+      - '**/pyproject.toml'
 
 permissions:
   contents: read
@@ -39,14 +43,15 @@ jobs:
 
 Live examples it blocks today: `crossenv` (purged, ~1,400 installs/week),
 `supabase-js` (purged — a model dropped the scope from `@supabase/supabase-js`),
-`types-node`. The weekly list is in
+`types-node`; on PyPI, `sklearn` (~320,000 installs/week that belong to
+`scikit-learn`) and `pytorch` (a decoy whose only content says to install `torch`). The weekly list is in
 [SLOPSQUATS.md](https://github.com/hxckya/pkgtruth/blob/main/SLOPSQUATS.md).
 
 ## Inputs
 
 | input | default | |
 |---|---|---|
-| `path` | `.` | Directory with `package.json`, or a path to one |
+| `path` | `.` | Directory holding the manifests, or a path to one manifest |
 | `fail-on` | `danger` | `danger` fails on HALLUCINATED/DANGER; `caution` also fails on CAUTION and UNKNOWN |
 | `comment` | `true` | Post/update a sticky PR comment (needs `pull-requests: write`) |
 | `version` | `latest` | pkgtruth version |
